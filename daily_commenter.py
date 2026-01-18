@@ -79,23 +79,29 @@ def main():
 
             # 2) Fetch posts
             try:
-                posts = list_recent_posts(..., user_identifier=person_identifier, ...)
+                posts = list_recent_posts(
+                    dsn=dsn,
+                    account_id=account_id,
+                    api_key=api_key,
+                    profile_id=person_identifier,
+                    lookback_days=lookback_days,
+                    limit=20,
+                    debug=debug,
+                )
             except requests.HTTPError as e:
                 if e.response is not None and e.response.status_code == 422 and public_identifier:
                     print("[WARN] 422 for member URN; retrying with public_identifier", public_identifier)
-                    posts = list_recent_posts(..., user_identifier=public_identifier, ...)
+                    posts = list_recent_posts(
+                        dsn=dsn,
+                        account_id=account_id,
+                        api_key=api_key,
+                        profile_id=person_identifier,
+                        lookback_days=lookback_days,
+                        limit=20,
+                        debug=debug,
+                    )
                 else:
-                    raise
-
-            # posts = list_recent_posts(
-            #     dsn=dsn,
-            #     account_id=account_id,
-            #     api_key=api_key,
-            #     profile_id=person_identifier,
-            #     lookback_days=lookback_days,
-            #     limit=20,
-            #     debug=debug,
-            # )
+                    raise        
 
             if not posts:
                 print(f"[INFO] No posts in last {lookback_days}d for {name}")
