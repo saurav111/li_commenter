@@ -146,10 +146,7 @@ def _parse_unipile_datetime(post: dict) -> datetime | None:
 
     return None
 
-from urllib.parse import quote
-
-def list_recent_posts(dsn, account_id, api_key, user_identifier, lookback_days=30, limit=20, debug=False):
-    
+from urllib.parse import quote    
 
 def list_recent_posts(
     dsn: str,
