@@ -1,78 +1,74 @@
-import os, time, random
-from datetime import datetime, timezone
-from db import init_db, get_db
+from db import get_db
 from salesnav import sync_salesnav_list
-from unipile import list_recent_posts, comment_on_post
+from unipile import list_recent_posts
+from slack_notify import send_for_review
 from claude import generate_comment
-
-def human_sleep(min_s, max_s):
-    time.sleep(random.uniform(min_s, max_s))
-
-# ENV
-DSN = os.environ["UNIPILE_DSN"]
-ACCOUNT_ID = os.environ["UNIPILE_ACCOUNT_ID"]
-UNIPILE_KEY = os.environ["UNIPILE_API_KEY"]
-ANTHROPIC_KEY = os.environ["ANTHROPIC_API_KEY"]
-
-MAX_COMMENTS = int(os.getenv("MAX_COMMENTS_PER_DAY", "20"))
-
-SALESNAV_URL = "https://www.linkedin.com/sales/search/people?query=(filters:List((type:LEAD_LIST,values:List((id:7373374312965111808,text:Podcast%20guests)))))"
+import os
 
 def main():
-    init_db()
-    sync_salesnav_list(DSN, ACCOUNT_ID, UNIPILE_KEY, SALESNAV_URL)
+    dsn = os.environ["UNIPILE_DSN"]
+    account_id = os.environ["UNIPILE_ACCOUNT_ID"]
+    unipile_key = os.environ["UNIPILE_API_KEY"]
+    slack_token = os.environ["SLACK_BOT_TOKEN"]
+    slack_user = os.environ["SLACK_USER_ID"]
+    anthropic_key = os.environ["ANTHROPIC_API_KEY"]
 
-    conn = get_db()
-    c = conn.cursor()
+    # 1) Sync Sales Nav list
+    inserted = sync_salesnav_list(dsn, account_id, unipile_key)
+    print(f"[SYNC] Inserted {inserted} targets from Sales Nav search")
 
-    c.execute("SELECT * FROM targets")
-    targets = c.fetchall()
+    with get_db() as (conn, c):
 
-    comments_today = 0
+        # 2) Iterate targets
+        c.execute("SELECT profile_url, linkedin_urn, name FROM targets")
+        targets = c.fetchall()
 
-    for t in targets:
-        if comments_today >= MAX_COMMENTS:
-            break
+        for profile_url, urn, name in targets:
 
-        posts = list_recent_posts(
-            DSN, ACCOUNT_ID, UNIPILE_KEY, t["linkedin_urn"]
-        )
-
-        for p in posts:
-            social_id = p.get("social_id")
-            if not social_id:
-                continue
-
-            c.execute("SELECT 1 FROM comments WHERE social_id=?", (social_id,))
-            if c.fetchone():
-                continue
-
-            post_text = p.get("text", "")
-            comment = generate_comment(
-                ANTHROPIC_KEY,
-                t["name"] or "the author",
-                post_text
+            posts = list_recent_posts(
+                dsn,
+                account_id,
+                unipile_key,
+                urn,
+                lookback_days=30
             )
 
-            comment_on_post(
-                DSN, ACCOUNT_ID, UNIPILE_KEY, social_id, comment
-            )
+            if not posts:
+                print(f"[INFO] No posts in last 30d for {name}")
+                continue
 
-            human_sleep(8, 15)  # simulate reading profile
+            for post in posts:
+                social_id = post["id"]
+                post_text = post.get("text", "")
 
+                # Skip if already commented
+                c.execute(
+                    "SELECT 1 FROM comments WHERE social_id=%s",
+                    (social_id,)
+                )
+                if c.fetchone():
+                    continue
 
-            c.execute("""
-            INSERT INTO comments(social_id, comment_text, commented_at)
-            VALUES (%s, %s, %s)
-            """, (social_id, comment, datetime.now(timezone.utc)))
+                comment = generate_comment(anthropic_key, name, post_text)
 
-            conn.commit()
+                # Insert pending review
+                c.execute("""
+                    INSERT INTO pending_reviews
+                      (social_id, profile_name, post_text, generated_comment, status, created_at)
+                    VALUES (%s, %s, %s, %s, %s, now())
+                    ON CONFLICT (social_id) DO NOTHING
+                """, (social_id, name, post_text, comment, "pending"))
 
-            comments_today += 1
-            time.sleep(random.randint(30, 120))
-            break
+                conn.commit()
 
-    conn.close()
+                send_for_review(
+                    slack_token,
+                    slack_user,
+                    social_id,
+                    name,
+                    post_text,
+                    comment
+                )
 
 if __name__ == "__main__":
     main()
