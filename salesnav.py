@@ -10,9 +10,12 @@ def normalize_dsn(dsn: str) -> str:
         dsn = "https://" + dsn
     return dsn
 
-def sync_salesnav_list(dsn, account_id, api_key, salesnav_url, max_people=200):
+def sync_salesnav_list(dsn, account_id, api_key, salesnav_url=None, max_people=200):
     dsn = normalize_dsn(dsn)
     url = f"{dsn}/api/v1/linkedin/search"
+    
+    if not salesnav_url:
+        raise ValueError("salesnav_url is required (set SALESNAV_URL env var)")
 
     headers = {
         "X-API-KEY": api_key,

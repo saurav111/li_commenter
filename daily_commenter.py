@@ -5,6 +5,8 @@ from slack_notify import send_for_review
 from claude import generate_comment
 import os
 
+salesnav_url = os.environ["SALESNAV_URL"]
+
 def main():
     dsn = os.environ["UNIPILE_DSN"]
     account_id = os.environ["UNIPILE_ACCOUNT_ID"]
@@ -14,7 +16,13 @@ def main():
     anthropic_key = os.environ["ANTHROPIC_API_KEY"]
 
     # 1) Sync Sales Nav list
-    inserted = sync_salesnav_list(dsn, account_id, unipile_key)
+    inserted = sync_salesnav_list(
+        dsn,
+        account_id,
+        unipile_key,
+        salesnav_url,
+        max_people=20
+    )
     print(f"[SYNC] Inserted {inserted} targets from Sales Nav search")
 
     with get_db() as (conn, c):
