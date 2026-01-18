@@ -63,7 +63,7 @@ def main():
 
             c.execute("""
             INSERT INTO comments(social_id, comment_text, commented_at)
-            VALUES (?, ?, ?)
+            VALUES (%s, %s, %s)
             """, (social_id, comment, datetime.now(timezone.utc)))
 
             conn.commit()

@@ -1,44 +1,46 @@
 import os
-import sqlite3
-from pathlib import Path
+from contextlib import contextmanager
+import psycopg
+from psycopg.rows import dict_row
 
-DB_PATH = Path(os.getenv("DB_PATH", "state.db"))
+DATABASE_URL = os.environ["DATABASE_URL"]
 
+@contextmanager
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+    with psycopg.connect(
+        DATABASE_URL,
+        row_factory=dict_row
+    ) as conn:
+        with conn.cursor() as cur:
+            yield conn, cur
 
 def init_db():
-    conn = get_db()
-    c = conn.cursor()
+    with get_db() as (conn, cur):
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS targets (
+            profile_url TEXT PRIMARY KEY,
+            linkedin_urn TEXT,
+            name TEXT
+        );
+        """)
 
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS targets (
-        profile_url TEXT PRIMARY KEY,
-        linkedin_urn TEXT,
-        name TEXT
-    )
-    """)
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS comments (
+            social_id TEXT PRIMARY KEY,
+            comment_text TEXT,
+            commented_at TIMESTAMPTZ
+        );
+        """)
 
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS comments (
-        social_id TEXT PRIMARY KEY,
-        comment_text TEXT,
-        commented_at DATETIME
-    )
-    """)
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS pending_reviews (
+            social_id TEXT PRIMARY KEY,
+            profile_name TEXT,
+            post_text TEXT,
+            generated_comment TEXT,
+            status TEXT,
+            created_at TIMESTAMPTZ
+        );
+        """)
 
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS pending_reviews (
-        social_id TEXT PRIMARY KEY,
-        profile_name TEXT,
-        post_text TEXT,
-        generated_comment TEXT,
-        status TEXT,
-        created_at DATETIME
-    )
-    """)
-
-    conn.commit()
-    conn.close()
+        conn.commit()

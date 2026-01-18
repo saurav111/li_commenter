@@ -46,28 +46,30 @@ def sync_salesnav_list(dsn, account_id, api_key, salesnav_url, max_people=200):
 
     people = people[:max_people]
 
-    conn = get_db()
-    c = conn.cursor()
 
-    inserted = 0
-    for i, p in enumerate(people):
-        profile = p.get("profile_url") or p.get("url") or p.get("profileUrl")
-        urn = p.get("urn") or p.get("profile_urn") or p.get("profileUrn") or p.get("id")
-        name = p.get("name") or p.get("full_name") or p.get("fullName")
+    with get_db() as (conn, c):
 
-        if not profile:
-            continue
+        inserted = 0
+        for i, p in enumerate(people):
+            profile = p.get("profile_url") or p.get("url") or p.get("profileUrl")
+            urn = p.get("urn") or p.get("profile_urn") or p.get("profileUrn") or p.get("id")
+            name = p.get("name") or p.get("full_name") or p.get("fullName")
 
-        c.execute("""
-            INSERT OR IGNORE INTO targets(profile_url, linkedin_urn, name)
-            VALUES (?, ?, ?)
-        """, (profile, urn, name))
-        inserted += 1
+            if not profile:
+                continue
 
-        if i % 10 == 0:
-            human_sleep(3, 6)
+            c.execute("""
+                INSERT INTO targets(profile_url, linkedin_urn, name)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (profile_url) DO NOTHING
+                """, (profile, urn, name))
 
-    conn.commit()
-    conn.close()
+
+            inserted += 1
+
+            if i % 10 == 0:
+                human_sleep(3, 6)
+
+        conn.commit()
 
     print(f"[SYNC] Inserted {inserted} targets from Sales Nav search")
