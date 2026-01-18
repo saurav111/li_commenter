@@ -7,10 +7,7 @@ DATABASE_URL = os.environ["DATABASE_URL"]
 
 @contextmanager
 def get_db():
-    with psycopg.connect(
-        DATABASE_URL,
-        row_factory=dict_row
-    ) as conn:
+    with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
         with conn.cursor() as cur:
             yield conn, cur
 
@@ -20,6 +17,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS targets (
             profile_url TEXT PRIMARY KEY,
             linkedin_urn TEXT,
+            person_identifier TEXT,
             name TEXT
         );
         """)
