@@ -18,7 +18,8 @@ def init_db():
             profile_url TEXT PRIMARY KEY,
             linkedin_urn TEXT,
             person_identifier TEXT,
-            name TEXT
+            name TEXT,
+            public_identifier TEXT
         );
         """)
 

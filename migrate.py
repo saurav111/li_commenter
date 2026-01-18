@@ -6,6 +6,7 @@ def migrate():
     # Ensure column exists even if table was created earlier
     with get_db() as (conn, cur):
         cur.execute("ALTER TABLE targets ADD COLUMN IF NOT EXISTS person_identifier TEXT;")
+        cur.execute("ALTER TABLE targets ADD COLUMN IF NOT EXISTS public_identifier TEXT;")
         conn.commit()
 
 if __name__ == "__main__":

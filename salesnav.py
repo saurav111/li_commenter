@@ -88,17 +88,17 @@ def sync_salesnav_list(
             if person_identifier:
                 resolved += 1
 
-            c.execute(
-                """
-                INSERT INTO targets(profile_url, linkedin_urn, person_identifier, name)
-                VALUES (%s, %s, %s, %s)
-                ON CONFLICT (profile_url) DO UPDATE
-                SET linkedin_urn = EXCLUDED.linkedin_urn,
-                    person_identifier = COALESCE(EXCLUDED.person_identifier, targets.person_identifier),
-                    name = COALESCE(EXCLUDED.name, targets.name)
-                """,
-                (profile_url, salesnav_lead_id, person_identifier, name),
-            )
+            public_identifier = p.get("public_identifier") or p.get("publicIdentifier")
+
+            c.execute("""
+              INSERT INTO targets(profile_url, linkedin_urn, person_identifier, public_identifier, name)
+              VALUES (%s, %s, %s, %s, %s)
+              ON CONFLICT (profile_url) DO UPDATE
+              SET person_identifier = COALESCE(EXCLUDED.person_identifier, targets.person_identifier),
+                  public_identifier = COALESCE(EXCLUDED.public_identifier, targets.public_identifier),
+                  name = COALESCE(EXCLUDED.name, targets.name)
+            """, (profile_url, salesnav_url, person_identifier, public_identifier, name))
+            
             inserted += 1
 
             # Gentle pacing (avoid bursts)

@@ -146,6 +146,10 @@ def _parse_unipile_datetime(post: dict) -> datetime | None:
 
     return None
 
+from urllib.parse import quote
+
+def list_recent_posts(dsn, account_id, api_key, user_identifier, lookback_days=30, limit=20, debug=False):
+    
 
 def list_recent_posts(
     dsn: str,
@@ -162,18 +166,24 @@ def list_recent_posts(
       GET /api/v1/users/{identifier}/posts?account_id=...
     """
     dsn = normalize_dsn(dsn)
-    safe_profile_id = quote(str(profile_id), safe=":_-")
-    url = f"{dsn}/api/v1/users/{safe_profile_id}/posts"
-    headers = {"X-API-KEY": api_key, "accept": "application/json"}
-    params = {"account_id": account_id, "limit": max(1, min(int(limit), 100))}
 
-    _sleep(0.7, 1.6)
+    safe_id = quote(str(user_identifier), safe="")  # encode everything
+    url = f"{dsn}/api/v1/users/{safe_id}/posts"
+
+    headers = {"X-API-KEY": api_key, "accept": "application/json"}
+    params = {"account_id": account_id, "limit": limit}
+
+    if debug:
+        print("[DEBUG] posts url:", url)
+        print("[DEBUG] identifier:", user_identifier)
+
     r = requests.get(url, headers=headers, params=params, timeout=60)
     if debug and r.status_code >= 400:
-        print("[POSTS] status:", r.status_code, "body:", r.text[:1500])
+        print("[DEBUG] status:", r.status_code, "body:", r.text[:1500])
     r.raise_for_status()
 
     data = r.json()
+
     items = _items_from_unipile_response(data)
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=int(lookback_days))
