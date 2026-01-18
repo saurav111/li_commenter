@@ -1,133 +1,11 @@
-import requests, time, random
-from datetime import datetime, timedelta, timezone
 import re
+import time
+import random
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
-
-def human_sleep(a,b):
-    time.sleep(random.uniform(a,b))
-
-_REL_RE = re.compile(r"^\s*(\d+)\s*([smhdw])\s*$", re.IGNORECASE)
-
-# unipile.py
-
-def resolve_salesnav_lead_to_profile_id(base_url: str, api_key: str, account_id: str, salesnav_lead_id: str) -> str | None:
-    """
-    salesnav_lead_id: typically ACw...
-    returns: classic provider internal id: ACo... / ADo... (what /users/{id}/posts expects)
-    """
-    url = f"{base_url}/api/v1/users/{salesnav_lead_id}"
-    headers = {"X-API-KEY": api_key, "accept": "application/json"}
-    params = {
-        "account_id": account_id,
-        "linkedin_api": "sales_navigator",  # key bit
-        "notify": "false",
-        # don't request linkedin_sections here; keep it light
-    }
-
-    r = requests.get(url, headers=headers, params=params, timeout=60)
-    r.raise_for_status()
-    data = r.json()
-
-    # Unipile responses vary slightly; these are common keys.
-    # You can print(data.keys()) once in debug to confirm.
-    return data.get("provider_id") or data.get("id")
-
-
-def parse_created_at(value):
-    """
-    Handles:
-    - ISO strings: 2026-01-03T12:34:56Z
-    - Relative strings: '1d', '3h', '15m', '2w'
-    Returns an aware datetime in UTC or None.
-    """
-    if value is None:
-        return None
-
-    now = datetime.now(timezone.utc)
-
-    # Relative like "1d"
-    if isinstance(value, str):
-        m = _REL_RE.match(value)
-        if m:
-            n = int(m.group(1))
-            unit = m.group(2).lower()
-            delta = {
-                "s": timedelta(seconds=n),
-                "m": timedelta(minutes=n),
-                "h": timedelta(hours=n),
-                "d": timedelta(days=n),
-                "w": timedelta(weeks=n),
-            }.get(unit)
-            return now - delta if delta else None
-
-        # ISO-like
-        s = value.strip()
-        if s.endswith("Z"):
-            s = s[:-1] + "+00:00"
-        try:
-            dtv = datetime.fromisoformat(s)
-            if dtv.tzinfo is None:
-                dtv = dtv.replace(tzinfo=timezone.utc)
-            return dtv.astimezone(timezone.utc)
-        except ValueError:
-            return None
-
-    # Epoch seconds/ms
-    if isinstance(value, (int, float)):
-        v = float(value)
-        if v > 1e12:  # ms
-            v /= 1000.0
-        return datetime.fromtimestamp(v, tz=timezone.utc)
-
-    return None
-
-
 import requests
-from datetime import datetime, timedelta, timezone
-import os, json
 
-# unipile.py
-
-from datetime import datetime, timedelta, timezone
-
-def list_recent_posts(base_url: str, api_key: str, account_id: str, profile_id: str, since_days: int = 30, limit: int = 30):
-    """
-    profile_id must be ACo... / ADo...
-    """
-    url = f"{base_url}/api/v1/users/{profile_id}/posts"
-    headers = {"X-API-KEY": api_key, "accept": "application/json"}
-    params = {"account_id": account_id, "limit": min(max(limit, 1), 100)}
-
-    r = requests.get(url, headers=headers, params=params, timeout=60)
-    r.raise_for_status()
-    data = r.json()
-
-    items = data.get("items") or data.get("data") or data  # depending on Unipile envelope
-    if not isinstance(items, list):
-        items = []
-
-    cutoff = datetime.now(timezone.utc) - timedelta(days=since_days)
-
-    recent = []
-    for p in items:
-        # Best field to use (from Unipile docs/examples)
-        dt_str = p.get("parsed_datetime")
-        if dt_str:
-            try:
-                dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
-                if dt >= cutoff:
-                    recent.append(p)
-                continue
-            except Exception:
-                pass
-
-        # Fallback: if only "date": "1d"/"3w" exists, don't crash—just include it and let caller decide
-        # Or parse it if you want.
-        recent.append(p)
-
-    return recent
 
 def normalize_dsn(dsn: str) -> str:
     dsn = (dsn or "").strip().rstrip("/")
@@ -136,37 +14,222 @@ def normalize_dsn(dsn: str) -> str:
     return dsn
 
 
-def comment_on_post(dsn, account_id, api_key, social_id, text, comment_id=None, mentions=None):
+def _items_from_unipile_response(data):
     """
-    Unipile expects account_id in JSON body for this endpoint.
-    Docs example:
+    Unipile sometimes returns:
+      - {"items":[...]}
+      - {"data":[...]}
+      - or a raw list
+    """
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for k in ("items", "data", "results"):
+            v = data.get(k)
+            if isinstance(v, list):
+                return v
+    return []
+
+
+def _sleep(min_s=0.8, max_s=2.2):
+    time.sleep(random.uniform(min_s, max_s))
+
+
+def extract_salesnav_lead_id(obj) -> str | None:
+    """
+    Try to extract the Sales Navigator lead id (often starts with ACw...) from:
+      - a dict result object from /linkedin/search
+      - or a string (url/urn)
+    """
+    if obj is None:
+        return None
+
+    if isinstance(obj, dict):
+        # Try common keys first
+        for k in ("salesnav_id", "lead_id", "leadId", "id", "urn", "profile_urn", "profileUrn"):
+            v = obj.get(k)
+            if isinstance(v, str) and v.strip():
+                cand = extract_salesnav_lead_id(v.strip())
+                if cand:
+                    return cand
+
+        # Try URL fields
+        for k in ("profile_url", "profileUrl", "url", "lead_url", "leadUrl"):
+            v = obj.get(k)
+            if isinstance(v, str) and v.strip():
+                cand = extract_salesnav_lead_id(v.strip())
+                if cand:
+                    return cand
+
+        return None
+
+    s = str(obj).strip()
+
+    # Sales Nav lead URL: /sales/lead/<ID>,
+    m = re.search(r"/sales/lead/([^,/?#]+)", s)
+    if m:
+        return m.group(1)
+
+    # Sometimes it's directly an id like ACwAAB...
+    if re.match(r"^[A-Za-z0-9_-]{10,}$", s) and s.startswith("ACw"):
+        return s
+
+    # Could be urn-ish; just attempt to capture ACw token
+    m2 = re.search(r"(ACw[A-Za-z0-9_-]{6,})", s)
+    if m2:
+        return m2.group(1)
+
+    return None
+
+
+def resolve_salesnav_lead_to_profile_id(dsn: str, api_key: str, account_id: str, salesnav_lead_id: str, debug: bool = False) -> str | None:
+    """
+    Converts Sales Navigator lead id (ACw...) to classic LinkedIn profile identifier (ACo.../ADo...),
+    using:
+      GET /api/v1/users/{identifier}?account_id=...&linkedin_api=sales_navigator
+    """
+    dsn = normalize_dsn(dsn)
+    url = f"{dsn}/api/v1/users/{quote(str(salesnav_lead_id), safe='')}"
+    headers = {"X-API-KEY": api_key, "accept": "application/json"}
+    params = {
+        "account_id": account_id,
+        "linkedin_api": "sales_navigator",
+        "notify": "false",
+    }
+
+    r = requests.get(url, headers=headers, params=params, timeout=60)
+    if debug and r.status_code >= 400:
+        print("[RESOLVE] status:", r.status_code, "body:", r.text[:1500])
+    r.raise_for_status()
+    data = r.json()
+
+    # Unipile shapes vary; these are common:
+    # - data["provider_internal_id"] (often ACo...)
+    # - data["provider_id"]
+    # - data["id"]
+    for k in ("provider_internal_id", "provider_id", "id", "identifier"):
+        v = data.get(k) if isinstance(data, dict) else None
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+
+    return None
+
+
+def _parse_unipile_datetime(post: dict) -> datetime | None:
+    """
+    Best field: parsed_datetime (ISO string)
+    fallback: date like "1d", "2w"
+    """
+    dt_str = post.get("parsed_datetime")
+    if isinstance(dt_str, str) and dt_str.strip():
+        try:
+            return datetime.fromisoformat(dt_str.replace("Z", "+00:00")).astimezone(timezone.utc)
+        except Exception:
+            pass
+
+    rel = post.get("date")
+    if isinstance(rel, str):
+        rel = rel.strip().lower()
+        m = re.match(r"^(\d+)\s*(d|day|days|w|wk|week|weeks|mo|mon|month|months|y|yr|year|years)$", rel)
+        if m:
+            n = int(m.group(1))
+            unit = m.group(2)
+            now = datetime.now(timezone.utc)
+            if unit.startswith("d") or unit in ("day", "days"):
+                return now - timedelta(days=n)
+            if unit.startswith("w") or unit in ("wk", "week", "weeks"):
+                return now - timedelta(weeks=n)
+            if unit.startswith("mo") or unit in ("mon", "month", "months"):
+                return now - timedelta(days=30 * n)
+            if unit.startswith("y") or unit in ("yr", "year", "years"):
+                return now - timedelta(days=365 * n)
+
+    return None
+
+
+def list_recent_posts(
+    dsn: str,
+    account_id: str,
+    api_key: str,
+    profile_id: str,
+    lookback_days: int = 30,
+    limit: int = 20,
+    debug: bool = False,
+):
+    """
+    Fetch posts for classic LinkedIn profile identifier (ACo.../ADo...).
+    Endpoint:
+      GET /api/v1/users/{identifier}/posts?account_id=...
+    """
+    dsn = normalize_dsn(dsn)
+    safe_profile_id = quote(str(profile_id), safe=":_-")
+    url = f"{dsn}/api/v1/users/{safe_profile_id}/posts"
+    headers = {"X-API-KEY": api_key, "accept": "application/json"}
+    params = {"account_id": account_id, "limit": max(1, min(int(limit), 100))}
+
+    _sleep(0.7, 1.6)
+    r = requests.get(url, headers=headers, params=params, timeout=60)
+    if debug and r.status_code >= 400:
+        print("[POSTS] status:", r.status_code, "body:", r.text[:1500])
+    r.raise_for_status()
+
+    data = r.json()
+    items = _items_from_unipile_response(data)
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=int(lookback_days))
+    eligible = []
+
+    for p in items:
+        if not isinstance(p, dict):
+            continue
+        dt = _parse_unipile_datetime(p)
+        if dt is None:
+            # If we cannot parse, keep it only in debug; otherwise skip.
+            if debug:
+                eligible.append(p)
+            continue
+        if dt >= cutoff:
+            eligible.append(p)
+
+    if debug:
+        print(f"[POSTS] profile_id={profile_id} total={len(items)} eligible={len(eligible)} lookback_days={lookback_days}")
+
+    return eligible
+
+
+def comment_on_post(
+    dsn: str,
+    account_id: str,
+    api_key: str,
+    social_id: str,
+    text: str,
+    comment_id: str | None = None,
+    mentions: list | None = None,
+    debug: bool = False,
+):
+    """
+    Comment on a post (activity URN is common):
       POST /api/v1/posts/{social_id}/comments
-      body: { "account_id": "...", "text": "Hey" }
+    Unipile expects account_id IN JSON body for this endpoint.
     """
-
-    # optional: encode social_id safely (keeps urn:li:activity:... working)
-    safe_social_id = quote(str(social_id), safe=":")  # keep colons
+    dsn = normalize_dsn(dsn)
+    safe_social_id = quote(str(social_id), safe=":")  # keep urn colons
     url = f"{dsn}/api/v1/posts/{safe_social_id}/comments"
-
     headers = {
         "X-API-KEY": api_key,
         "accept": "application/json",
         "content-type": "application/json",
     }
 
-    payload = {
-        "account_id": account_id,
-        "text": text,
-    }
-
-    # optional reply/mentions per docs
+    payload = {"account_id": account_id, "text": text}
     if comment_id:
         payload["comment_id"] = comment_id
     if mentions:
         payload["mentions"] = mentions
 
+    _sleep(0.8, 2.0)
     r = requests.post(url, headers=headers, json=payload, timeout=60)
-    if r.status_code >= 400:
-        print("[UNIPILE] status:", r.status_code, "body:", r.text[:1200])
+    if debug and r.status_code >= 400:
+        print("[COMMENT] status:", r.status_code, "body:", r.text[:1500])
     r.raise_for_status()
     return r.json() if r.text else None

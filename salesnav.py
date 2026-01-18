@@ -1,175 +1,109 @@
-import requests, time, random
+import os
+import time
+import random
+import requests
+
 from db import get_db
-
-def human_sleep(a, b):
-    time.sleep(random.uniform(a, b))
-
-def pick_public_profile_url(p: dict) -> str | None:
-    # Best case (documented by Unipile)
-    u = p.get("public_profile_url")
-    if isinstance(u, str) and u.strip():
-        return u.strip()
-
-    # Sometimes comes in camelCase
-    u = p.get("publicProfileUrl")
-    if isinstance(u, str) and u.strip():
-        return u.strip()
-
-    # Fallback: build from public_identifier
-    pid = p.get("public_identifier") or p.get("publicIdentifier")
-    if isinstance(pid, str) and pid.strip():
-        return f"https://www.linkedin.com/in/{pid.strip().strip('/')}/"
-
-    return None
-
-def pick_person_identifier(p: dict) -> str | None:
-    # Unipile docs show member_urn/public_identifier for people results
-    mu = p.get("member_urn") or p.get("memberUrn")
-    if isinstance(mu, str) and mu.strip():
-        return mu.strip()  # e.g. urn:li:member:76351639
-
-    pid = p.get("public_identifier") or p.get("publicIdentifier")
-    if isinstance(pid, str) and pid.strip():
-        return pid.strip()  # e.g. luciano-bana-b876a021
-
-    return None
+from unipile import normalize_dsn, _items_from_unipile_response, extract_salesnav_lead_id, resolve_salesnav_lead_to_profile_id
 
 
-def pick_profile_url(p):
-    # Try known fields first
-    for k in ["public_profile_url", "publicProfileUrl", "profile_url", "profileUrl", "url"]:
-        v = p.get(k)
-        if isinstance(v, str) and v.strip():
-            if "/sales/lead/" not in v:
-                return v.strip()
+def _sleep(min_s=1.2, max_s=3.0):
+    time.sleep(random.uniform(min_s, max_s))
 
-    # Try to synthesize from public identifier / vanity
-    for k in ["public_identifier", "publicIdentifier", "vanityName", "vanity_name"]:
-        v = p.get(k)
-        if isinstance(v, str) and v.strip():
-            return f"https://www.linkedin.com/in/{v.strip().strip('/')}/"
 
-    return None
-
-def normalize_dsn(dsn: str) -> str:
-    dsn = dsn.strip().rstrip("/")
-    if not dsn.startswith("http://") and not dsn.startswith("https://"):
-        dsn = "https://" + dsn
-    return dsn
-
-def resolve_person_identifier(dsn, account_id, api_key, profile_url):
+def sync_salesnav_list(
+    dsn: str,
+    account_id: str,
+    api_key: str,
+    salesnav_url: str,
+    max_people: int = 200,
+    debug: bool = False,
+):
     """
-    Resolve a LinkedIn profile URL into an identifier usable for:
-      GET /api/v1/users/{identifier}/posts
-    We try multiple likely keys returned by Unipile.
+    1) Uses Unipile to parse the Sales Nav search URL and return people
+    2) Extracts Sales Nav lead id (ACw...) for each person
+    3) Resolves Sales Nav lead id -> classic profile id (ACo.../ADo...)
+    4) Upserts into Postgres 'targets' table
+
+    targets schema expected:
+      targets(profile_url TEXT PRIMARY KEY,
+              linkedin_urn TEXT,           # we store salesnav_lead_id here (ACw...)
+              person_identifier TEXT,      # resolved ACo.../ADo...
+              name TEXT)
     """
     dsn = normalize_dsn(dsn)
     url = f"{dsn}/api/v1/linkedin/search"
-
     headers = {
         "X-API-KEY": api_key,
         "accept": "application/json",
         "content-type": "application/json",
     }
-    params = {"account_id": account_id}
-    payload = {"url": profile_url}
-
-    r = requests.post(url, headers=headers, params=params, json=payload, timeout=60)
-    r.raise_for_status()
-    data = r.json()
-
-    items = None
-    if isinstance(data, dict):
-        for k in ["items", "data", "results"]:
-            if isinstance(data.get(k), list):
-                items = data[k]
-                break
-    if items is None:
-        items = []
-
-    if not items:
-        return None
-
-    p = items[0]
-    # Try common identifier fields
-    for key in ["person_urn", "profile_urn", "urn", "identifier", "id", "provider_internal_id"]:
-        v = p.get(key)
-        if v:
-            return str(v)
-
-    return None
-
-def sync_salesnav_list(dsn, account_id, api_key, salesnav_url, max_people=200):
-    dsn = normalize_dsn(dsn)
-    url = f"{dsn}/api/v1/linkedin/search"
-
-    headers = {
-        "X-API-KEY": api_key,
-        "accept": "application/json",
-        "content-type": "application/json",
-    }
-
     params = {"account_id": account_id}
     payload = {"url": salesnav_url}
 
     r = requests.post(url, headers=headers, params=params, json=payload, timeout=60)
-    if r.status_code >= 400:
-        print("STATUS:", r.status_code)
-        print("BODY:", r.text[:2000])
+    if debug and r.status_code >= 400:
+        print("[SALESNAV] status:", r.status_code, "body:", r.text[:2000])
     r.raise_for_status()
-
     data = r.json()
 
-    people = None
-    if isinstance(data, dict):
-        for k in ["items", "data", "results"]:
-            if isinstance(data.get(k), list):
-                people = data[k]
-                break
-    if people is None:
-        people = []
-
-    people = people[:max_people]
+    people = _items_from_unipile_response(data)[: int(max_people)]
 
     inserted = 0
     resolved = 0
 
     with get_db() as (conn, c):
-        for i, p in enumerate(people):
-            profile_url = pick_public_profile_url(p)
-            person_identifier = pick_person_identifier(p)
-
-            # keep salesnav lead url ONLY as a fallback reference (don’t use it for resolving posts)
-            salesnav_url = p.get("profile_url") or p.get("profileUrl") or p.get("url")
-
-            name = p.get("name") or p.get("full_name") or p.get("fullName") or "name"
-        
-
-            if not profile_url:
-                print("[DEBUG] missing public profile fields keys:", list(p.keys()))
+        for idx, p in enumerate(people):
+            if not isinstance(p, dict):
                 continue
 
-            # person_identifier = None
-            # try:
-            #     person_identifier = resolve_person_identifier(dsn, account_id, api_key, profile)
-            #     if person_identifier:
-            #         resolved += 1
-            # except Exception as e:
-            #     print("[WARN] resolve_person_identifier failed:", profile, repr(e))
+            # Name fields vary
+            name = (p.get("name") or p.get("full_name") or p.get("fullName") or "name").strip()
 
-            c.execute("""
+            # Store whatever URL we got for reference (can be sales nav lead url)
+            profile_url = (p.get("profile_url") or p.get("profileUrl") or p.get("url") or "").strip()
+            if not profile_url:
+                # if no URL, skip; we can still work via id but URL is helpful for debugging
+                profile_url = f"salesnav://{idx}"
+
+            salesnav_lead_id = extract_salesnav_lead_id(p)
+            if not salesnav_lead_id:
+                if debug:
+                    print("[SALESNAV] Could not extract lead id for:", name, "keys=", list(p.keys()))
+                continue
+
+            # Resolve to classic id (ACo/ADo) – cache in DB so daily job is fast
+            person_identifier = None
+            try:
+                person_identifier = resolve_salesnav_lead_to_profile_id(
+                    dsn=dsn,
+                    api_key=api_key,
+                    account_id=account_id,
+                    salesnav_lead_id=salesnav_lead_id,
+                    debug=debug,
+                )
+            except Exception as e:
+                print(f"[WARN] resolve_salesnav_lead_to_profile_id failed for {name} ({salesnav_lead_id}): {repr(e)}")
+
+            if person_identifier:
+                resolved += 1
+
+            c.execute(
+                """
                 INSERT INTO targets(profile_url, linkedin_urn, person_identifier, name)
                 VALUES (%s, %s, %s, %s)
                 ON CONFLICT (profile_url) DO UPDATE
                 SET linkedin_urn = EXCLUDED.linkedin_urn,
                     person_identifier = COALESCE(EXCLUDED.person_identifier, targets.person_identifier),
                     name = COALESCE(EXCLUDED.name, targets.name)
-            """, (profile_url, salesnav_url, person_identifier, name))
-
+                """,
+                (profile_url, salesnav_lead_id, person_identifier, name),
+            )
             inserted += 1
 
-            if i % 5 == 0:
-                human_sleep(2, 5)
+            # Gentle pacing (avoid bursts)
+            if idx % 3 == 0:
+                _sleep(1.5, 3.5)
 
         conn.commit()
 
