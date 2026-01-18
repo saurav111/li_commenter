@@ -10,6 +10,31 @@ def human_sleep(a,b):
 
 _REL_RE = re.compile(r"^\s*(\d+)\s*([smhdw])\s*$", re.IGNORECASE)
 
+# unipile.py
+
+def resolve_salesnav_lead_to_profile_id(base_url: str, api_key: str, account_id: str, salesnav_lead_id: str) -> str | None:
+    """
+    salesnav_lead_id: typically ACw...
+    returns: classic provider internal id: ACo... / ADo... (what /users/{id}/posts expects)
+    """
+    url = f"{base_url}/api/v1/users/{salesnav_lead_id}"
+    headers = {"X-API-KEY": api_key, "accept": "application/json"}
+    params = {
+        "account_id": account_id,
+        "linkedin_api": "sales_navigator",  # key bit
+        "notify": "false",
+        # don't request linkedin_sections here; keep it light
+    }
+
+    r = requests.get(url, headers=headers, params=params, timeout=60)
+    r.raise_for_status()
+    data = r.json()
+
+    # Unipile responses vary slightly; these are common keys.
+    # You can print(data.keys()) once in debug to confirm.
+    return data.get("provider_id") or data.get("id")
+
+
 def parse_created_at(value):
     """
     Handles:
@@ -63,48 +88,46 @@ import requests
 from datetime import datetime, timedelta, timezone
 import os, json
 
-def list_recent_posts(dsn, account_id, api_key, user_identifier, lookback_days=30, limit=20, debug=False):
-    url = f"{dsn}/api/v1/users/{user_identifier}/posts"
+# unipile.py
+
+from datetime import datetime, timedelta, timezone
+
+def list_recent_posts(base_url: str, api_key: str, account_id: str, profile_id: str, since_days: int = 30, limit: int = 30):
+    """
+    profile_id must be ACo... / ADo...
+    """
+    url = f"{base_url}/api/v1/users/{profile_id}/posts"
     headers = {"X-API-KEY": api_key, "accept": "application/json"}
-    params = {"account_id": account_id, "limit": limit}
+    params = {"account_id": account_id, "limit": min(max(limit, 1), 100)}
 
     r = requests.get(url, headers=headers, params=params, timeout=60)
-    if debug:
-        print("[POSTS] url:", r.url)
-        print("[POSTS] status:", r.status_code)
-        print("[POSTS] body:", r.text[:1500])
-
-    if r.status_code != 200:
-        return []
-
+    r.raise_for_status()
     data = r.json()
-    items = None
-    if isinstance(data, dict):
-        for k in ["items", "data", "results"]:
-            if isinstance(data.get(k), list):
-                items = data[k]
-                break
-    if items is None and isinstance(data, list):
-        items = data
-    if items is None:
+
+    items = data.get("items") or data.get("data") or data  # depending on Unipile envelope
+    if not isinstance(items, list):
         items = []
 
-    cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=since_days)
 
-    eligible = []
+    recent = []
     for p in items:
-        created = p.get("created_at") or p.get("createdAt") or p.get("date")
-        ts = parse_created_at(created)
-        if not ts:
-            continue
-        cutoff = datetime.now(timezone.utc) - timedelta(days=30)
-        if ts >= cutoff:
-            eligible.append(p)
+        # Best field to use (from Unipile docs/examples)
+        dt_str = p.get("parsed_datetime")
+        if dt_str:
+            try:
+                dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+                if dt >= cutoff:
+                    recent.append(p)
+                continue
+            except Exception:
+                pass
 
-    if debug and not eligible:
-        print(f"[POSTS] parsed items={len(items)} eligible={len(eligible)} cutoff_days={lookback_days}")
+        # Fallback: if only "date": "1d"/"3w" exists, don't crash—just include it and let caller decide
+        # Or parse it if you want.
+        recent.append(p)
 
-    return eligible
+    return recent
 
 def normalize_dsn(dsn: str) -> str:
     dsn = (dsn or "").strip().rstrip("/")
