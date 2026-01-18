@@ -1,7 +1,8 @@
+import os
 import sqlite3
 from pathlib import Path
 
-DB_PATH = Path("state.db")
+DB_PATH = Path(os.getenv("DB_PATH", "state.db"))
 
 def get_db():
     conn = sqlite3.connect(DB_PATH)

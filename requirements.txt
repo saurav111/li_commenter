@@ -3,3 +3,4 @@ anthropic
 python-dateutil
 fastapi
 uvicorn
+python-multipart
