@@ -4,6 +4,23 @@ from db import get_db
 def human_sleep(a, b):
     time.sleep(random.uniform(a, b))
 
+
+def pick_profile_url(p):
+    # Try known fields first
+    for k in ["public_profile_url", "publicProfileUrl", "profile_url", "profileUrl", "url"]:
+        v = p.get(k)
+        if isinstance(v, str) and v.strip():
+            if "/sales/lead/" not in v:
+                return v.strip()
+
+    # Try to synthesize from public identifier / vanity
+    for k in ["public_identifier", "publicIdentifier", "vanityName", "vanity_name"]:
+        v = p.get(k)
+        if isinstance(v, str) and v.strip():
+            return f"https://www.linkedin.com/in/{v.strip().strip('/')}/"
+
+    return None
+
 def normalize_dsn(dsn: str) -> str:
     dsn = dsn.strip().rstrip("/")
     if not dsn.startswith("http://") and not dsn.startswith("https://"):
@@ -89,7 +106,7 @@ def sync_salesnav_list(dsn, account_id, api_key, salesnav_url, max_people=200):
 
     with get_db() as (conn, c):
         for i, p in enumerate(people):
-            profile = p.get("profile_url") or p.get("url") or p.get("profileUrl")
+            profile = pick_profile_url(p)
             salesnav_urn = p.get("urn") or p.get("profile_urn") or p.get("profileUrn") or p.get("id")
             name = p.get("name") or p.get("full_name") or p.get("fullName") or "name"
 
