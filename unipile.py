@@ -152,7 +152,7 @@ def list_recent_posts(
     dsn: str,
     account_id: str,
     api_key: str,
-    profile_id: str,
+    user_identifier: str,
     lookback_days: int = 30,
     limit: int = 20,
     debug: bool = False,
