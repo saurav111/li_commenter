@@ -1,0 +1,21 @@
+cat > .gitignore << 'EOF'
+# secrets
+.env
+*.env
+
+# local db / runtime
+state.db
+/data
+*.sqlite
+*.db
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.envrc
+
+# mac
+.DS_Store
+EOF
