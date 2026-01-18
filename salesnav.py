@@ -4,6 +4,36 @@ from db import get_db
 def human_sleep(a, b):
     time.sleep(random.uniform(a, b))
 
+def pick_public_profile_url(p: dict) -> str | None:
+    # Best case (documented by Unipile)
+    u = p.get("public_profile_url")
+    if isinstance(u, str) and u.strip():
+        return u.strip()
+
+    # Sometimes comes in camelCase
+    u = p.get("publicProfileUrl")
+    if isinstance(u, str) and u.strip():
+        return u.strip()
+
+    # Fallback: build from public_identifier
+    pid = p.get("public_identifier") or p.get("publicIdentifier")
+    if isinstance(pid, str) and pid.strip():
+        return f"https://www.linkedin.com/in/{pid.strip().strip('/')}/"
+
+    return None
+
+def pick_person_identifier(p: dict) -> str | None:
+    # Unipile docs show member_urn/public_identifier for people results
+    mu = p.get("member_urn") or p.get("memberUrn")
+    if isinstance(mu, str) and mu.strip():
+        return mu.strip()  # e.g. urn:li:member:76351639
+
+    pid = p.get("public_identifier") or p.get("publicIdentifier")
+    if isinstance(pid, str) and pid.strip():
+        return pid.strip()  # e.g. luciano-bana-b876a021
+
+    return None
+
 
 def pick_profile_url(p):
     # Try known fields first
@@ -106,20 +136,26 @@ def sync_salesnav_list(dsn, account_id, api_key, salesnav_url, max_people=200):
 
     with get_db() as (conn, c):
         for i, p in enumerate(people):
-            profile = pick_profile_url(p)
-            salesnav_urn = p.get("urn") or p.get("profile_urn") or p.get("profileUrn") or p.get("id")
-            name = p.get("name") or p.get("full_name") or p.get("fullName") or "name"
+            profile_url = pick_public_profile_url(p)
+            person_identifier = pick_person_identifier(p)
 
-            if not profile:
+            # keep salesnav lead url ONLY as a fallback reference (don’t use it for resolving posts)
+            salesnav_url = p.get("profile_url") or p.get("profileUrl") or p.get("url")
+
+            name = p.get("name") or p.get("full_name") or p.get("fullName") or "name"
+        
+
+            if not profile_url:
+                print("[DEBUG] missing public profile fields keys:", list(p.keys()))
                 continue
 
-            person_identifier = None
-            try:
-                person_identifier = resolve_person_identifier(dsn, account_id, api_key, profile)
-                if person_identifier:
-                    resolved += 1
-            except Exception as e:
-                print("[WARN] resolve_person_identifier failed:", profile, repr(e))
+            # person_identifier = None
+            # try:
+            #     person_identifier = resolve_person_identifier(dsn, account_id, api_key, profile)
+            #     if person_identifier:
+            #         resolved += 1
+            # except Exception as e:
+            #     print("[WARN] resolve_person_identifier failed:", profile, repr(e))
 
             c.execute("""
                 INSERT INTO targets(profile_url, linkedin_urn, person_identifier, name)
@@ -128,7 +164,7 @@ def sync_salesnav_list(dsn, account_id, api_key, salesnav_url, max_people=200):
                 SET linkedin_urn = EXCLUDED.linkedin_urn,
                     person_identifier = COALESCE(EXCLUDED.person_identifier, targets.person_identifier),
                     name = COALESCE(EXCLUDED.name, targets.name)
-            """, (profile, salesnav_urn, person_identifier, name))
+            """, (profile_url, salesnav_url, person_identifier, name))
 
             inserted += 1
 
