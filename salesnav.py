@@ -2,7 +2,17 @@ import time
 import random
 import requests
 
-from unipile import normalize_dsn
+from unipile import normalize_dsn, _items_from_unipile_response
+
+data = r.json() if r.text else {}
+items = _items_from_unipile_response(data)
+
+if debug:
+    print("[salesnav] keys:", list(data.keys()) if isinstance(data, dict) else type(data))
+    if isinstance(data, dict) and "paging" in data:
+        print("[salesnav] paging:", data.get("paging"))
+    print(f"[salesnav] got items={len(items)} cursor={cursor!r}")
+
 
 def _sleep(a=0.8, b=1.8):
     time.sleep(random.uniform(a, b))

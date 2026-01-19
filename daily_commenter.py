@@ -11,6 +11,44 @@ from unipile import list_recent_posts
 from claude import generate_comment
 from slack_notify import send_for_review
 
+from resolver import resolve_profile_url_to_identifier
+
+def resolve_missing_identifiers(dsn, account_id, api_key, max_to_resolve=500, debug=False):
+    resolved = 0
+    with get_db() as (conn, cur):
+        cur.execute("""
+            SELECT profile_url
+            FROM targets
+            WHERE person_identifier IS NULL
+            LIMIT %s
+        """, (max_to_resolve,))
+        rows = cur.fetchall()
+
+    for r in rows:
+        profile_url = r["profile_url"]
+        try:
+            ident = resolve_profile_url_to_identifier(dsn, account_id, api_key, profile_url)
+        except Exception as e:
+            if debug:
+                print("[resolve] failed:", profile_url, repr(e))
+            continue
+
+        if ident:
+            with get_db() as (conn, cur):
+                cur.execute("""
+                    UPDATE targets
+                    SET person_identifier=%s
+                    WHERE profile_url=%s
+                """, (ident, profile_url))
+                conn.commit()
+            resolved += 1
+            if debug:
+                print("[resolve] ok:", profile_url, "->", ident)
+        jitter_sleep(0.8, 2.0)
+
+    print(f"[RESOLVE] filled person_identifier for {resolved} targets")
+    return resolved
+
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -180,6 +218,15 @@ def main():
         debug=debug,
     )
     print(f"[SYNC] Upserted {inserted} targets from Sales Nav search")
+    resolve_missing_identifiers(dsn, account_id, api_key, max_to_resolve=max_people, debug=debug)
+
+    with get_db() as (conn, cur):
+        cur.execute("SELECT COUNT(*) AS n FROM targets")
+        total = cur.fetchone()["n"]
+        cur.execute("SELECT COUNT(*) AS n FROM targets WHERE person_identifier IS NOT NULL")
+        with_id = cur.fetchone()["n"]
+        print(f"[DB] targets total={total} with_person_identifier={with_id}")
+
 
     # 2) Refresh post_pool across ALL targets
     upserted_posts = refresh_post_pool_for_all_targets(
