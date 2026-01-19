@@ -203,40 +203,89 @@ def list_recent_posts(
 
     return eligible
 
+import json
+import uuid
+import requests
+from urllib.parse import quote
 
-def comment_on_post(
-    dsn: str,
-    account_id: str,
-    api_key: str,
-    social_id: str,
-    text: str,
-    comment_id: str | None = None,
-    mentions: list | None = None,
-    debug: bool = False,
-):
-    """
-    Comment on a post (activity URN is common):
-      POST /api/v1/posts/{social_id}/comments
-    Unipile expects account_id IN JSON body for this endpoint.
-    """
+import json
+import uuid
+import requests
+from urllib.parse import quote
+
+def comment_on_post(dsn, account_id, api_key, social_id, comment_text, debug=False):
     dsn = normalize_dsn(dsn)
-    safe_social_id = quote(str(social_id), safe=":")  # keep urn colons
+
+    rid = str(uuid.uuid4())[:8]
+
+    # Encode social_id in case it is "urn:li:activity:..." (colons break path validators)
+    safe_social_id = quote(str(social_id), safe="")
+
     url = f"{dsn}/api/v1/posts/{safe_social_id}/comments"
     headers = {
         "X-API-KEY": api_key,
         "accept": "application/json",
         "content-type": "application/json",
     }
+    params = {"account_id": account_id}
 
-    payload = {"account_id": account_id, "text": text}
-    if comment_id:
-        payload["comment_id"] = comment_id
-    if mentions:
-        payload["mentions"] = mentions
+    payload = {"text": comment_text}
 
-    _sleep(0.8, 2.0)
-    r = requests.post(url, headers=headers, json=payload, timeout=60)
-    if debug and r.status_code >= 400:
-        print("[COMMENT] status:", r.status_code, "body:", r.text[:1500])
+    # Minimal breadcrumb always
+    print(f"[UNIPILE:{rid}] POST comment social_id={social_id!r} url={url} len={len(comment_text)}")
+
+    if debug:
+        print(f"[UNIPILE:{rid}] params={params}")
+        print(f"[UNIPILE:{rid}] payload={json.dumps(payload)[:1200]}")
+
+    r = requests.post(url, headers=headers, params=params, json=payload, timeout=60)
+
+    if r.status_code >= 400:
+        print(f"[UNIPILE:{rid}] ERROR status={r.status_code}")
+        print(f"[UNIPILE:{rid}] response_headers={dict(r.headers)}")
+        print(f"[UNIPILE:{rid}] response_body={r.text[:2000]}")
+
     r.raise_for_status()
-    return r.json() if r.text else None
+
+    if debug:
+        print(f"[UNIPILE:{rid}] OK status={r.status_code} body={r.text[:800]}")
+
+    return r.json() if r.text else {"ok": True}
+
+
+# def comment_on_post(
+#     dsn: str,
+#     account_id: str,
+#     api_key: str,
+#     social_id: str,
+#     text: str,
+#     comment_id: str | None = None,
+#     mentions: list | None = None,
+#     debug: bool = False,
+# ):
+#     """
+#     Comment on a post (activity URN is common):
+#       POST /api/v1/posts/{social_id}/comments
+#     Unipile expects account_id IN JSON body for this endpoint.
+#     """
+#     dsn = normalize_dsn(dsn)
+#     safe_social_id = quote(str(social_id), safe=":")  # keep urn colons
+#     url = f"{dsn}/api/v1/posts/{safe_social_id}/comments"
+#     headers = {
+#         "X-API-KEY": api_key,
+#         "accept": "application/json",
+#         "content-type": "application/json",
+#     }
+
+#     payload = {"account_id": account_id, "text": text}
+#     if comment_id:
+#         payload["comment_id"] = comment_id
+#     if mentions:
+#         payload["mentions"] = mentions
+
+#     _sleep(0.8, 2.0)
+#     r = requests.post(url, headers=headers, json=payload, timeout=60)
+#     if debug and r.status_code >= 400:
+#         print("[COMMENT] status:", r.status_code, "body:", r.text[:1500])
+#     r.raise_for_status()
+#     return r.json() if r.text else None

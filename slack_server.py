@@ -129,6 +129,9 @@ async def slack_actions(req: Request):
 
             if action_id == "approve_comment":
                 comment_text = row["generated_comment"]
+                print(f"[slack/actions] approve social_id={social_id!r} dry_run={os.getenv('DRY_RUN')}")
+                print(f"[slack/actions] approve comment_preview={comment_text[:200]!r}")
+
 
                 if os.getenv("DRY_RUN") == "1":
                     print(f"[DRY_RUN] Would comment on {social_id}: {comment_text[:200]}")
@@ -163,12 +166,17 @@ async def slack_actions(req: Request):
 
             if action_id == "edit_comment":
                 # Open modal with prefilled comment
+
                 ok = open_edit_modal(
                     slack_token=os.environ["SLACK_BOT_TOKEN"],
                     trigger_id=trigger_id,
                     social_id=social_id,
                     original_comment=row["generated_comment"],
                 )
+
+                print(f"[slack/actions] approve social_id={social_id!r} dry_run={os.getenv('DRY_RUN')}")
+                print(f"[slack/actions] approve comment_preview={comment_text[:200]!r}")
+
                 # Even if modal fails, ack Slack to avoid toast
                 if not ok:
                     print("[slack/actions] views.open failed for social_id:", social_id)
