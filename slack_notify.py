@@ -1,16 +1,18 @@
 import requests
 import json
 
+
 def send_for_review(
     token: str,
     user_id: str,
     social_id: str,
     author: str,
     post_text: str,
-    comment: str
-) -> None:
+    comment: str,
+):
     """
     Sends a Slack DM to `user_id` with Approve / Edit / Skip buttons.
+    Returns (channel_id, message_ts) for later chat.update/chat.delete.
     """
     url = "https://slack.com/api/chat.postMessage"
     headers = {
@@ -18,24 +20,29 @@ def send_for_review(
         "Content-Type": "application/json; charset=utf-8",
     }
 
+    post_preview = (post_text or "").strip()
+    comment_preview = (comment or "").strip()
+
     blocks = [
         {
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": f"*Post by:* {author}\n\n*Post text:*\n{(post_text or '').strip()[:1500]}"
-            }
+            "type": "header",
+            "text": {"type": "plain_text", "text": "Review LinkedIn comment"},
         },
         {
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"*Proposed comment:*\n```{(comment or '').strip()}```"
-            }
+                "text": f"*Post by:* {author}\n\n*Post text:*\n{post_preview[:1500]}",
+            },
+        },
+        {"type": "divider"},
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"*Proposed comment:*\n```{comment_preview}```"},
         },
         {
             "type": "actions",
-            "block_id": f"review_{social_id}",
+            "block_id": f"review_{social_id[:60]}",
             "elements": [
                 {
                     "type": "button",
@@ -59,6 +66,10 @@ def send_for_review(
                 },
             ],
         },
+        {
+            "type": "context",
+            "elements": [{"type": "mrkdwn", "text": f"`social_id`: {social_id}"}],
+        },
     ]
 
     payload = {
@@ -72,3 +83,9 @@ def send_for_review(
     data = r.json()
     if not data.get("ok"):
         raise RuntimeError(f"Slack chat.postMessage failed: {data}")
+
+    # Slack returns the channel + ts of the posted message
+    channel_id = data.get("channel")
+    message_ts = (data.get("message") or {}).get("ts")
+
+    return channel_id, message_ts

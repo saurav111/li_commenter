@@ -38,7 +38,9 @@ def init_db():
             post_text TEXT,
             generated_comment TEXT,
             status TEXT,
-            created_at TIMESTAMPTZ
+            created_at TIMESTAMPTZ,
+            slack_channel TEXT,
+            slack_ts TEXT
         );
         """)
 

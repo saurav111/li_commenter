@@ -7,6 +7,8 @@ def migrate():
     with get_db() as (conn, cur):
         cur.execute("ALTER TABLE targets ADD COLUMN IF NOT EXISTS person_identifier TEXT;")
         cur.execute("ALTER TABLE targets ADD COLUMN IF NOT EXISTS public_identifier TEXT;")
+        cur.execute("ALTER TABLE pending_reviews ADD COLUMN IF NOT EXISTS slack_channel TEXT;")
+        cur.execute("ALTER TABLE pending_reviews ADD COLUMN IF NOT EXISTS slack_ts TEXT;")
         conn.commit()
 
 if __name__ == "__main__":
