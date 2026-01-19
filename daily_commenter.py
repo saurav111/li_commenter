@@ -103,6 +103,7 @@ def main():
                 if sent >= max_per_day:
                     break
 
+                post = p
                 social_id = post.get("social_id") or post.get("socialId") or post.get("urn") or post.get("entity_urn")
                 post_text = (p.get("text") or p.get("content") or "").strip()
 
