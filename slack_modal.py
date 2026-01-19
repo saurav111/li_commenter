@@ -42,4 +42,5 @@ def open_edit_modal(
     r.raise_for_status()
     data = r.json()
     if not data.get("ok"):
+        print("[slack/modal] views.open response:", data)
         raise RuntimeError(f"Slack views.open failed: {data}")

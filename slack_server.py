@@ -15,6 +15,59 @@ app = FastAPI()
 
 SLACK_API = "https://slack.com/api"
 
+import threading
+import traceback
+
+def _run_in_thread(fn, *args, **kwargs):
+    t = threading.Thread(target=fn, args=args, kwargs=kwargs, daemon=True)
+    t.start()
+
+def _edit_submit_worker(social_id: str, edited_comment: str):
+    try:
+        with get_db() as (conn, cur):
+            cur.execute(
+                "SELECT slack_channel, slack_ts FROM pending_reviews WHERE social_id=%s",
+                (social_id,),
+            )
+            row = cur.fetchone()
+            slack_channel = row.get("slack_channel") if row else None
+            slack_ts = row.get("slack_ts") if row else None
+
+            if os.getenv("DRY_RUN") == "1":
+                print(f"[DRY_RUN] Would comment on {social_id}: {edited_comment[:200]}")
+            else:
+                comment_on_post(
+                    os.environ["UNIPILE_DSN"],
+                    os.environ["UNIPILE_ACCOUNT_ID"],
+                    os.environ["UNIPILE_API_KEY"],
+                    social_id,
+                    edited_comment,
+                    debug=True,
+                )
+
+            cur.execute(
+                """
+                INSERT INTO comments(social_id, comment_text, commented_at)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (social_id) DO UPDATE
+                SET comment_text = EXCLUDED.comment_text,
+                    commented_at = EXCLUDED.commented_at
+                """,
+                (social_id, edited_comment, _utc_now()),
+            )
+            cur.execute("DELETE FROM pending_reviews WHERE social_id=%s", (social_id,))
+            conn.commit()
+
+        # ✅ Update Slack message to remove buttons
+        if slack_channel and slack_ts:
+            slack_update_message(slack_channel, slack_ts, "✅ Posted (edited). (removed from queue)")
+        else:
+            print("[edit_submit] missing slack_channel/ts for", social_id)
+
+    except Exception as e:
+        print("[edit_submit] ERROR:", repr(e))
+        print(traceback.format_exc())
+
 
 def _utc_now():
     return datetime.now(timezone.utc)
@@ -166,58 +219,22 @@ async def slack_actions(req: Request):
             callback_id = view.get("callback_id")
 
             if callback_id != "edit_comment_submit":
-                return JSONResponse({"response_action": "clear"})
+                return {"response_action": "clear"}
 
             social_id = view.get("private_metadata")
             if not social_id:
                 print("[slack/actions] Modal submit missing private_metadata/social_id")
-                return JSONResponse({"response_action": "clear"})
+                return {"response_action": "clear"}
 
             try:
                 edited_comment = view["state"]["values"]["comment_block"]["comment_input"]["value"]
             except Exception:
                 print("[slack/actions] Modal submit missing edited comment value")
-                return JSONResponse({"response_action": "clear"})
+                return {"response_action": "clear"}
 
-            # Post edited comment (or DRY_RUN) + update DB
-            with get_db() as (conn, cur):
-                cur.execute(
-                    "SELECT 1 FROM pending_reviews WHERE social_id=%s",
-                    (social_id,),
-                )
-                row = cur.fetchone()
-                if not row:
-                    print("[slack/actions] No pending review found for", social_id)
-                    return JSONResponse({"response_action": "clear"})
-
-                if os.getenv("DRY_RUN") == "1":
-                    print(f"[DRY_RUN] Would comment on {social_id}: {edited_comment[:200]}")
-                else:
-                    comment_on_post(
-                        os.environ["UNIPILE_DSN"],
-                        os.environ["UNIPILE_ACCOUNT_ID"],
-                        os.environ["UNIPILE_API_KEY"],
-                        social_id,
-                        edited_comment,
-                        debug=True,
-                    )
-
-                cur.execute(
-                    """
-                    INSERT INTO comments(social_id, comment_text, commented_at)
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT (social_id) DO UPDATE
-                    SET comment_text = EXCLUDED.comment_text,
-                        commented_at = EXCLUDED.commented_at
-                    """,
-                    (social_id, edited_comment, _utc_now()),
-                )
-                cur.execute("DELETE FROM pending_reviews WHERE social_id=%s", (social_id,))
-                conn.commit()
-
-            # NOTE: We can't easily update the original message here unless you store channel+ts in DB.
-            # Still clearing modal is correct.
-            return JSONResponse({"response_action": "clear"})
+            # ✅ ACK immediately so Slack never times out
+            _run_in_thread(_edit_submit_worker, social_id, edited_comment)
+            return {"response_action": "clear"}
 
         # -----------------------
         # 2) Button clicks (ACK fast)
@@ -247,22 +264,39 @@ async def slack_actions(req: Request):
             return _ack_ok()
 
         if action_id == "edit_comment":
-            # Open modal quickly (no slow work)
-            # Pull original comment for prefill (small DB query is fine)
-            with get_db() as (conn, cur):
-                cur.execute(
-                    "SELECT generated_comment FROM pending_reviews WHERE social_id=%s",
-                    (social_id,),
-                )
-                row = cur.fetchone()
+            # Open modal FAST (avoid DB before views.open).
+            original_comment = ""
 
-            original_comment = row["generated_comment"] if row else ""
+            # Try extracting the proposed comment from the Slack message blocks (fast, no DB).
+            try:
+                blocks = (payload.get("message") or {}).get("blocks") or []
+                for b in blocks:
+                    if b.get("type") == "section":
+                        txt = ((b.get("text") or {}).get("text")) or ""
+                        # our slack_notify uses "*Proposed comment:*```...```"
+                        if "Proposed comment" in txt and "```" in txt:
+                            original_comment = txt.split("```", 1)[1].rsplit("```", 1)[0].strip()
+                            break
+            except Exception:
+                pass
+
+            # Fallback to DB only if needed (still might be slow, but rare)
+            if not original_comment:
+                with get_db() as (conn, cur):
+                    cur.execute(
+                        "SELECT generated_comment FROM pending_reviews WHERE social_id=%s",
+                        (social_id,),
+                    )
+                    row = cur.fetchone()
+                original_comment = (row["generated_comment"] if row else "") or ""
+
             ok = open_edit_modal(
                 slack_token=os.environ["SLACK_BOT_TOKEN"],
                 trigger_id=trigger_id,
                 social_id=social_id,
                 original_comment=original_comment,
             )
+
             if not ok:
                 print("[slack/actions] views.open failed for social_id:", social_id)
             return _ack_ok()
