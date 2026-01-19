@@ -208,84 +208,62 @@ import uuid
 import requests
 from urllib.parse import quote
 
-import json
-import uuid
-import requests
-from urllib.parse import quote
+def _normalize_social_id(social_id: str) -> str:
+    """
+    Unipile/LinkedIn often expects an activity URN for posts.
+    If we only have a numeric id like '7417471607981596672',
+    convert it to 'urn:li:activity:7417471607981596672'.
 
-def comment_on_post(dsn, account_id, api_key, social_id, comment_text, debug=False):
+    If it's already an URN (starts with 'urn:'), keep it.
+    """
+    s = str(social_id).strip()
+
+    if s.startswith("urn:"):
+        return s
+
+    # If it's purely digits, treat it as a LinkedIn activity id
+    if s.isdigit():
+        return f"urn:li:activity:{s}"
+
+    # Otherwise leave as-is (could be a different supported id)
+    return s
+
+def comment_on_post(
+    dsn: str,
+    account_id: str,
+    api_key: str,
+    social_id: str,
+    text: str,
+    comment_id: str | None = None,
+    mentions: list | None = None,
+    debug: bool = False,
+):
+    """
+    Comment on a post (activity URN is common):
+      POST /api/v1/posts/{social_id}/comments
+    Unipile expects account_id IN JSON body for this endpoint.
+    """
     dsn = normalize_dsn(dsn)
 
-    rid = str(uuid.uuid4())[:8]
-
-    # Encode social_id in case it is "urn:li:activity:..." (colons break path validators)
-    safe_social_id = quote(str(social_id), safe="")
-
+    normalized = _normalize_social_id(social_id)
+    safe_social_id = quote(normalized, safe=":")  # keep urn colons
     url = f"{dsn}/api/v1/posts/{safe_social_id}/comments"
+
     headers = {
         "X-API-KEY": api_key,
         "accept": "application/json",
         "content-type": "application/json",
     }
-    params = {"account_id": account_id}
 
-    payload = {"text": comment_text}
+    payload = {"account_id": account_id, "text": text}
+    if comment_id:
+        payload["comment_id"] = comment_id
+    if mentions:
+        payload["mentions"] = mentions
 
-    # Minimal breadcrumb always
-    print(f"[UNIPILE:{rid}] POST comment social_id={social_id!r} url={url} len={len(comment_text)}")
-
-    if debug:
-        print(f"[UNIPILE:{rid}] params={params}")
-        print(f"[UNIPILE:{rid}] payload={json.dumps(payload)[:1200]}")
-
-    r = requests.post(url, headers=headers, params=params, json=payload, timeout=60)
-
-    if r.status_code >= 400:
-        print(f"[UNIPILE:{rid}] ERROR status={r.status_code}")
-        print(f"[UNIPILE:{rid}] response_headers={dict(r.headers)}")
-        print(f"[UNIPILE:{rid}] response_body={r.text[:2000]}")
-
+    _sleep(0.8, 2.0)
+    r = requests.post(url, headers=headers, json=payload, timeout=60)
+    if debug and r.status_code >= 400:
+        print("[COMMENT] status:", r.status_code, "body:", r.text[:1500])
     r.raise_for_status()
-
-    if debug:
-        print(f"[UNIPILE:{rid}] OK status={r.status_code} body={r.text[:800]}")
-
-    return r.json() if r.text else {"ok": True}
-
-
-# def comment_on_post(
-#     dsn: str,
-#     account_id: str,
-#     api_key: str,
-#     social_id: str,
-#     text: str,
-#     comment_id: str | None = None,
-#     mentions: list | None = None,
-#     debug: bool = False,
-# ):
-#     """
-#     Comment on a post (activity URN is common):
-#       POST /api/v1/posts/{social_id}/comments
-#     Unipile expects account_id IN JSON body for this endpoint.
-#     """
-#     dsn = normalize_dsn(dsn)
-#     safe_social_id = quote(str(social_id), safe=":")  # keep urn colons
-#     url = f"{dsn}/api/v1/posts/{safe_social_id}/comments"
-#     headers = {
-#         "X-API-KEY": api_key,
-#         "accept": "application/json",
-#         "content-type": "application/json",
-#     }
-
-#     payload = {"account_id": account_id, "text": text}
-#     if comment_id:
-#         payload["comment_id"] = comment_id
-#     if mentions:
-#         payload["mentions"] = mentions
-
-#     _sleep(0.8, 2.0)
-#     r = requests.post(url, headers=headers, json=payload, timeout=60)
-#     if debug and r.status_code >= 400:
-#         print("[COMMENT] status:", r.status_code, "body:", r.text[:1500])
-#     r.raise_for_status()
-#     return r.json() if r.text else None
+    return r.json() if r.text else None
