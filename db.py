@@ -19,7 +19,8 @@ def init_db():
             linkedin_urn TEXT,
             person_identifier TEXT,
             name TEXT,
-            public_identifier TEXT
+            public_identifier TEXT,
+            salesnav_lead_id TEXT
         );
         """)
 

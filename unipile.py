@@ -4,6 +4,10 @@ import random
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
+from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
+import requests
+
 import requests
 
 
@@ -148,60 +152,60 @@ def _parse_unipile_datetime(post: dict) -> datetime | None:
 
 from urllib.parse import quote    
 
-def list_recent_posts(
-    dsn: str,
-    account_id: str,
-    api_key: str,
-    user_identifier: str,
-    lookback_days: int = 30,
-    limit: int = 20,
-    debug: bool = False,
-):
-    """
-    Fetch posts for classic LinkedIn profile identifier (ACo.../ADo...).
-    Endpoint:
-      GET /api/v1/users/{identifier}/posts?account_id=...
-    """
-    dsn = normalize_dsn(dsn)
+# def list_recent_posts(
+#     dsn: str,
+#     account_id: str,
+#     api_key: str,
+#     user_identifier: str,
+#     lookback_days: int = 30,
+#     limit: int = 20,
+#     debug: bool = False,
+# ):
+#     """
+#     Fetch posts for classic LinkedIn profile identifier (ACo.../ADo...).
+#     Endpoint:
+#       GET /api/v1/users/{identifier}/posts?account_id=...
+#     """
+#     dsn = normalize_dsn(dsn)
 
-    safe_id = quote(str(user_identifier), safe="")  # encode everything
-    url = f"{dsn}/api/v1/users/{safe_id}/posts"
+#     safe_id = quote(str(user_identifier), safe="")  # encode everything
+#     url = f"{dsn}/api/v1/users/{safe_id}/posts"
 
-    headers = {"X-API-KEY": api_key, "accept": "application/json"}
-    params = {"account_id": account_id, "limit": limit}
+#     headers = {"X-API-KEY": api_key, "accept": "application/json"}
+#     params = {"account_id": account_id, "limit": limit}
 
-    if debug:
-        print("[DEBUG] posts url:", url)
-        print("[DEBUG] identifier:", user_identifier)
+#     if debug:
+#         print("[DEBUG] posts url:", url)
+#         print("[DEBUG] identifier:", user_identifier)
 
-    r = requests.get(url, headers=headers, params=params, timeout=60)
-    if debug and r.status_code >= 400:
-        print("[DEBUG] status:", r.status_code, "body:", r.text[:1500])
-    r.raise_for_status()
+#     r = requests.get(url, headers=headers, params=params, timeout=60)
+#     if debug and r.status_code >= 400:
+#         print("[DEBUG] status:", r.status_code, "body:", r.text[:1500])
+#     r.raise_for_status()
 
-    data = r.json()
+#     data = r.json()
 
-    items = _items_from_unipile_response(data)
+#     items = _items_from_unipile_response(data)
 
-    cutoff = datetime.now(timezone.utc) - timedelta(days=int(lookback_days))
-    eligible = []
+#     cutoff = datetime.now(timezone.utc) - timedelta(days=int(lookback_days))
+#     eligible = []
 
-    for p in items:
-        if not isinstance(p, dict):
-            continue
-        dt = _parse_unipile_datetime(p)
-        if dt is None:
-            # If we cannot parse, keep it only in debug; otherwise skip.
-            if debug:
-                eligible.append(p)
-            continue
-        if dt >= cutoff:
-            eligible.append(p)
+#     for p in items:
+#         if not isinstance(p, dict):
+#             continue
+#         dt = _parse_unipile_datetime(p)
+#         if dt is None:
+#             # If we cannot parse, keep it only in debug; otherwise skip.
+#             if debug:
+#                 eligible.append(p)
+#             continue
+#         if dt >= cutoff:
+#             eligible.append(p)
 
-    if debug:
-        print(f"[POSTS] profile_id={profile_id} total={len(items)} eligible={len(eligible)} lookback_days={lookback_days}")
+#     if debug:
+#         print(f"[POSTS] profile_id={profile_id} total={len(items)} eligible={len(eligible)} lookback_days={lookback_days}")
 
-    return eligible
+#     return eligible
 
 import json
 import uuid
@@ -228,6 +232,57 @@ def _normalize_social_id(social_id: str) -> str:
     # Otherwise leave as-is (could be a different supported id)
     return s
 
+def list_recent_posts(
+    dsn: str,
+    account_id: str,
+    api_key: str,
+    user_identifier: str,
+    lookback_days: int = 30,
+    limit: int = 20,
+    debug: bool = False,
+):
+    """
+    GET /api/v1/users/{identifier}/posts?account_id=...&limit=...
+    IMPORTANT: This identifier works best when it's the provider internal id (often ACo...),
+    NOT urn:li:member:...
+    """
+    dsn = normalize_dsn(dsn)
+    safe_id = quote(str(user_identifier), safe="")
+    url = f"{dsn}/api/v1/users/{safe_id}/posts"
+
+    headers = {"X-API-KEY": api_key, "accept": "application/json"}
+    params = {"account_id": account_id, "limit": limit}
+
+    if debug:
+        print("[POSTS] url:", url)
+        print("[POSTS] identifier:", user_identifier)
+
+    r = requests.get(url, headers=headers, params=params, timeout=60)
+    if debug and r.status_code >= 400:
+        print("[POSTS] status:", r.status_code, "body:", r.text[:1500])
+    r.raise_for_status()
+
+    data = r.json()
+    items = _items_from_unipile_response(data)
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=int(lookback_days))
+    eligible = []
+
+    for p in items:
+        if not isinstance(p, dict):
+            continue
+        dt = _parse_unipile_datetime(p)
+        if dt is None:
+            continue
+        if dt >= cutoff:
+            eligible.append(p)
+
+    if debug:
+        print(f"[POSTS] identifier={user_identifier} total={len(items)} eligible={len(eligible)} lookback_days={lookback_days}")
+
+    return eligible
+
+
 def comment_on_post(
     dsn: str,
     account_id: str,
@@ -239,15 +294,14 @@ def comment_on_post(
     debug: bool = False,
 ):
     """
-    Comment on a post (activity URN is common):
-      POST /api/v1/posts/{social_id}/comments
-    Unipile expects account_id IN JSON body for this endpoint.
+    POST /api/v1/posts/{social_id}/comments
+    This endpoint expects account_id in JSON body.
     """
     dsn = normalize_dsn(dsn)
 
-    # normalized = _normalize_social_id(social_id)
-    safe_social_id = quote(social_id, safe="")  # keep urn colons
-    url = f"{dsn}/api/v1/posts/{social_id}/comments"
+    normalized = _normalize_social_id(social_id)
+    safe_social_id = quote(str(normalized), safe="")  # encode everything
+    url = f"{dsn}/api/v1/posts/{safe_social_id}/comments"
 
     headers = {
         "X-API-KEY": api_key,
@@ -267,3 +321,43 @@ def comment_on_post(
         print("[COMMENT] status:", r.status_code, "body:", r.text[:1500])
     r.raise_for_status()
     return r.json() if r.text else None
+
+# def comment_on_post(
+#     dsn: str,
+#     account_id: str,
+#     api_key: str,
+#     social_id: str,
+#     text: str,
+#     comment_id: str | None = None,
+#     mentions: list | None = None,
+#     debug: bool = False,
+# ):
+#     """
+#     Comment on a post (activity URN is common):
+#       POST /api/v1/posts/{social_id}/comments
+#     Unipile expects account_id IN JSON body for this endpoint.
+#     """
+#     dsn = normalize_dsn(dsn)
+
+#     # normalized = _normalize_social_id(social_id)
+#     safe_social_id = quote(social_id, safe="")  # keep urn colons
+#     url = f"{dsn}/api/v1/posts/{social_id}/comments"
+
+#     headers = {
+#         "X-API-KEY": api_key,
+#         "accept": "application/json",
+#         "content-type": "application/json",
+#     }
+
+#     payload = {"account_id": account_id, "text": text}
+#     if comment_id:
+#         payload["comment_id"] = comment_id
+#     if mentions:
+#         payload["mentions"] = mentions
+
+#     _sleep(0.8, 2.0)
+#     r = requests.post(url, headers=headers, json=payload, timeout=60)
+#     if debug and r.status_code >= 400:
+#         print("[COMMENT] status:", r.status_code, "body:", r.text[:1500])
+#     r.raise_for_status()
+#     return r.json() if r.text else None

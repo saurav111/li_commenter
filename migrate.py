@@ -33,6 +33,8 @@ def migrate():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_post_pool_person ON post_pool(person_identifier);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_post_pool_last_seen ON post_pool(last_seen_at);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_handled_posts_status ON handled_posts(status);")
+        cur.execute("ALTER TABLE targets ADD COLUMN IF NOT EXISTS salesnav_lead_id TEXT;")
+
         conn.commit()
 
 if __name__ == "__main__":
