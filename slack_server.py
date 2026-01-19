@@ -159,6 +159,11 @@ def _approve_worker(payload: dict, social_id: str):
                 """,
                 (social_id, comment_text, _utc_now()),
             )
+            cur.execute(
+                "INSERT INTO handled_posts(social_id, status) VALUES (%s, %s) "
+                "ON CONFLICT (social_id) DO UPDATE SET status=EXCLUDED.status, handled_at=NOW()",
+                (social_id, "posted"),
+            )
             cur.execute("DELETE FROM pending_reviews WHERE social_id=%s", (social_id,))
             conn.commit()
 
@@ -179,6 +184,11 @@ def _skip_worker(payload: dict, social_id: str):
 
     try:
         with get_db() as (conn, cur):
+            cur.execute(
+                "INSERT INTO handled_posts(social_id, status) VALUES (%s, %s) "
+                "ON CONFLICT (social_id) DO UPDATE SET status=EXCLUDED.status, handled_at=NOW()",
+                (social_id, "skipped"),
+            )
             # Instead of delete, you *can* keep a status. If your schema has no status, delete is fine.
             cur.execute("DELETE FROM pending_reviews WHERE social_id=%s", (social_id,))
             conn.commit()
