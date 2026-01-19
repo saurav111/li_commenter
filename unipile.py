@@ -245,7 +245,7 @@ def comment_on_post(
     """
     dsn = normalize_dsn(dsn)
 
-    normalized = _normalize_social_id(social_id)
+    # normalized = _normalize_social_id(social_id)
     safe_social_id = quote(normalized, safe="")  # keep urn colons
     url = f"{dsn}/api/v1/posts/{safe_social_id}/comments"
 
